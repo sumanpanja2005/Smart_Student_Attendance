@@ -76,10 +76,11 @@ def logout(current_user: dict = Depends(get_current_user)):
     Stateless JWT logout confirmation.
     The client application clears the stored access token upon receiving this response.
     """
-    AuditService.log_auth_event(
-        event_type="AUTH_LOGOUT",
-        message=f"User {current_user.get('email')} logged out.",
-        actor_user_id=current_user.get("id"),
-        actor_role=current_user.get("role"),
-    )
+    if current_user:
+        AuditService.log_auth_event(
+            event_type="AUTH_LOGOUT",
+            message=f"User {current_user.get('email')} logged out.",
+            actor_user_id=current_user.get("id"),
+            actor_role=current_user.get("role"),
+        )
     return {"status": "ok", "message": "Successfully logged out"}

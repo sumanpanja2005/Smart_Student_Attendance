@@ -10,14 +10,16 @@ export const AuthProvider = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
 
   const logout = useCallback(async () => {
-    try {
-      await logoutUser();
-    } catch (err) {
-      // Ignore network errors on logout
-    } finally {
-      removeToken();
-      setTokenState(null);
-      setUser(null);
+    const storedToken = getToken();
+    removeToken();
+    setTokenState(null);
+    setUser(null);
+    if (storedToken) {
+      try {
+        await logoutUser();
+      } catch (err) {
+        // Ignore network/authorization errors on logout
+      }
     }
   }, []);
 

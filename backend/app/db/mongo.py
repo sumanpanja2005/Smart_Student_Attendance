@@ -12,6 +12,7 @@ class DatabaseManager:
         self.client: Optional[MongoClient] = None
         self.db = None
         self._status: str = "not_configured"
+        self._last_connect_attempt: float = 0.0
 
     def connect(self) -> str:
         """
@@ -19,11 +20,19 @@ class DatabaseManager:
         Supports standard MongoDB URIs and mongomock:// for local development tests.
         Returns database status: 'connected', 'disconnected', or 'not_configured'.
         """
+        import time
+
         uri = settings.MONGODB_URI
         if not uri or not uri.strip() or "<username>" in uri:
             self._status = "not_configured"
-            logger.warning("MongoDB URI is not configured in environment variables.")
             return self._status
+
+        now = time.time()
+        # Rate-limit connection retries to at most once every 5 seconds
+        if self._status == "disconnected" and (now - self._last_connect_attempt) < 5.0:
+            return self._status
+
+        self._last_connect_attempt = now
 
         # Support mongomock for local offline testing
         if uri.startswith("mongomock://"):

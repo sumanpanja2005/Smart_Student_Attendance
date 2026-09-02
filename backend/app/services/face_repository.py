@@ -8,8 +8,16 @@ logger = logging.getLogger("uvicorn.error")
 
 
 class FaceRepository:
-    @staticmethod
+    _active_embeddings_cache: Optional[List[Dict[str, Any]]] = None
+
+    @classmethod
+    def invalidate_cache(cls):
+        """Clears in-memory active embeddings cache."""
+        cls._active_embeddings_cache = None
+
+    @classmethod
     def save_embedding(
+        cls,
         student_id: str,
         embedding: List[float],
         model_name: str = "buffalo_s",
@@ -33,10 +41,11 @@ class FaceRepository:
         }
 
         res = db.face_embeddings.insert_one(doc)
+        cls.invalidate_cache()
         return str(res.inserted_id)
 
-    @staticmethod
-    def get_student_embeddings(student_id: str) -> List[Dict[str, Any]]:
+    @classmethod
+    def get_student_embeddings(cls, student_id: str) -> List[Dict[str, Any]]:
         """Retrieves active embedding records for a specific student."""
         db = db_manager.db
         if db is None:
@@ -48,21 +57,27 @@ class FaceRepository:
             del d["_id"]
         return docs
 
-    @staticmethod
-    def get_all_active_embeddings() -> List[Dict[str, Any]]:
+    @classmethod
+    def get_all_active_embeddings(cls) -> List[Dict[str, Any]]:
         """Retrieves all active embedding records across all students for recognition matching."""
+        if cls._active_embeddings_cache is not None:
+            return cls._active_embeddings_cache
+
         db = db_manager.db
         if db is None:
             return []
         query = {"is_active": True}
         docs = list(db.face_embeddings.find(query))
+        result = []
         for d in docs:
             d["id"] = str(d["_id"])
             del d["_id"]
-        return docs
+            result.append(d)
+        cls._active_embeddings_cache = result
+        return result
 
-    @staticmethod
-    def deactivate_student_embeddings(student_id: str) -> int:
+    @classmethod
+    def deactivate_student_embeddings(cls, student_id: str) -> int:
         """Soft-deactivates all registered face embeddings for a student."""
         db = db_manager.db
         if db is None:
@@ -72,4 +87,5 @@ class FaceRepository:
             {"student_id": student_id, "is_active": True},
             {"$set": {"is_active": False, "updated_at": now}},
         )
+        cls.invalidate_cache()
         return res.modified_count

@@ -234,12 +234,15 @@ class AttendanceRepository:
         Derived absence is calculated from closed sessions where student had no record.
         """
         db = cls._get_db()
+        student_doc = None
+        sid_str = str(student_id)
         try:
-            student_doc = db.students.find_one({"_id": ObjectId(student_id)})
+            if ObjectId.is_valid(sid_str):
+                student_doc = db.students.find_one({"_id": ObjectId(sid_str)}) or db.students.find_one({"user_id": ObjectId(sid_str)})
         except Exception:
-            student_doc = None
+            pass
         if not student_doc:
-            student_doc = db.students.find_one({"user_id": ObjectId(student_id)})
+            student_doc = db.students.find_one({"user_id": sid_str}) or db.students.find_one({"student_id": sid_str})
 
         student_class_id = str(student_doc.get("class_id")) if student_doc and student_doc.get("class_id") else None
 
@@ -255,11 +258,16 @@ class AttendanceRepository:
         total_sessions = len(closed_sessions)
         closed_session_ids = [str(s["_id"]) for s in closed_sessions]
 
+        possible_ids = [sid_str]
+        if student_doc:
+            possible_ids.extend([str(student_doc["_id"]), str(student_doc.get("student_id", "")), str(student_doc.get("user_id", ""))])
+        possible_ids = list(set(filter(None, possible_ids)))
+
         # Get student's records for these closed sessions
         records = list(
             db.attendance_records.find(
                 {
-                    "student_id": str(student_id),
+                    "student_id": {"$in": possible_ids},
                     "session_id": {"$in": closed_session_ids},
                 }
             )
@@ -306,12 +314,15 @@ class AttendanceRepository:
     def calculate_subject_summaries(cls, student_id: str) -> List[dict]:
         """Calculates subject-wise attendance summary for a student."""
         db = cls._get_db()
+        student_doc = None
+        sid_str = str(student_id)
         try:
-            student_doc = db.students.find_one({"_id": ObjectId(student_id)})
+            if ObjectId.is_valid(sid_str):
+                student_doc = db.students.find_one({"_id": ObjectId(sid_str)}) or db.students.find_one({"user_id": ObjectId(sid_str)})
         except Exception:
-            student_doc = None
+            pass
         if not student_doc:
-            student_doc = db.students.find_one({"user_id": ObjectId(student_id)})
+            student_doc = db.students.find_one({"user_id": sid_str}) or db.students.find_one({"student_id": sid_str})
 
         student_class_id = str(student_doc.get("class_id")) if student_doc and student_doc.get("class_id") else None
 
@@ -332,6 +343,11 @@ class AttendanceRepository:
                 sessions_by_subject[sub_id] = []
             sessions_by_subject[sub_id].append(s)
 
+        possible_ids = [sid_str]
+        if student_doc:
+            possible_ids.extend([str(student_doc["_id"]), str(student_doc.get("student_id", "")), str(student_doc.get("user_id", ""))])
+        possible_ids = list(set(filter(None, possible_ids)))
+
         results = []
         for sub_id, s_list in sessions_by_subject.items():
             try:
@@ -346,7 +362,7 @@ class AttendanceRepository:
             records = list(
                 db.attendance_records.find(
                     {
-                        "student_id": str(student_id),
+                        "student_id": {"$in": possible_ids},
                         "session_id": {"$in": s_ids},
                     }
                 )

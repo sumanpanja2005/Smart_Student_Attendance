@@ -25,7 +25,8 @@ const StudentAnalyticsPage = () => {
       setTrendPoints(trendData?.points || []);
     } catch (err) {
       console.error('Failed to load student analytics:', err);
-      setErrorMsg(err.response?.data?.detail || 'Failed to load attendance analytics.');
+      const msg = err.message || err.response?.data?.detail || 'Failed to load attendance analytics.';
+      setErrorMsg(msg);
     } finally {
       setLoading(false);
     }

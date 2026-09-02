@@ -28,11 +28,16 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error.response?.status;
+    const url = error.config?.url || '';
     
     // Automatically handle 401 Unauthorized by clearing token & emitting event
-    if (status === 401) {
+    // Prevent infinite loops: never dispatch auth:unauthorized for login or logout requests
+    if (status === 401 && !url.includes('/auth/login') && !url.includes('/auth/logout')) {
+      const hadToken = getToken();
       removeToken();
-      window.dispatchEvent(new CustomEvent('auth:unauthorized'));
+      if (hadToken) {
+        window.dispatchEvent(new CustomEvent('auth:unauthorized'));
+      }
     }
 
     const formattedError = {

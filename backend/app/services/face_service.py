@@ -66,6 +66,37 @@ def get_model_status() -> str:
     return _model_status
 
 
+def enhance_image_illumination(img: np.ndarray) -> np.ndarray:
+    """
+    Applies adaptive illumination enhancement (CLAHE + Gamma Correction)
+    to dark or poorly lit frames to improve face detection and recognition accuracy.
+    """
+    try:
+        # Convert to LAB color space to separate lightness from color channels
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+
+        avg_l = float(np.mean(l))
+        if avg_l < 55.0:
+            # Apply CLAHE to L-channel
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+            cl = clahe.apply(l)
+
+            # Adaptive gamma correction based on darkness
+            gamma = 0.55 if avg_l < 25.0 else 0.70
+            inv_gamma = 1.0 / gamma
+            table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+            cl = cv2.LUT(cl, table)
+
+            limg = cv2.merge((cl, a, b))
+            enhanced = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+            return enhanced
+        return img
+    except Exception as exc:
+        logger.warning(f"Illumination enhancement fallback: {exc}")
+        return img
+
+
 def decode_image_bytes(image_bytes: bytes) -> Optional[np.ndarray]:
     """Decodes image byte stream into an OpenCV BGR numpy array."""
     if not image_bytes:
@@ -84,13 +115,20 @@ def detect_and_extract_face(
 ) -> Tuple[List[Dict[str, Any]], str]:
     """
     Detects face(s) in image and extracts 512-d normalized embedding vector.
-    Uses InsightFace as primary engine, falling back to OpenCV face analysis if needed.
+    Uses InsightFace as primary engine with automatic low-light enhancement,
+    falling back to OpenCV face analysis if needed.
     Returns (detected_faces_list, engine_used).
     """
     model = get_face_analysis_model()
     if model is not None:
         try:
             faces = model.get(img)
+            # If no faces detected in raw frame, try detection on illumination-enhanced frame
+            if len(faces) == 0:
+                enhanced_img = enhance_image_illumination(img)
+                if enhanced_img is not img:
+                    faces = model.get(enhanced_img)
+
             if len(faces) > 0:
                 result = []
                 for f in faces:
@@ -117,6 +155,13 @@ def detect_and_extract_face(
         faces_rects = cascade.detectMultiScale(
             gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60)
         )
+        if len(faces_rects) == 0:
+            # Try CLAHE equalized grayscale for low-light fallback
+            clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+            gray_eq = clahe.apply(gray)
+            faces_rects = cascade.detectMultiScale(
+                gray_eq, scaleFactor=1.1, minNeighbors=3, minSize=(50, 50)
+            )
 
     if len(faces_rects) == 0:
         # Fallback skin-tone / contour facial detector for synthetic test images
@@ -161,6 +206,7 @@ def validate_face_quality(
 ) -> Tuple[bool, str]:
     """
     Validates face image quality (resolution, detection confidence, brightness, blur).
+    Automatically enhances low-light crops before blur evaluation.
     Returns (is_valid: bool, reason_msg: str).
     """
     if det_score < settings.FACE_MIN_DETECTION_CONFIDENCE:
@@ -187,8 +233,9 @@ def validate_face_quality(
         return False, "Invalid face crop coordinates."
 
     gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-
     avg_brightness = float(np.mean(gray_crop))
+
+    # If crop is too dark, reject only if below absolute minimum (e.g. pitch black < 10)
     if avg_brightness < settings.FACE_BRIGHTNESS_MIN:
         return (
             False,
@@ -200,7 +247,13 @@ def validate_face_quality(
             f"Image is overexposed (brightness: {avg_brightness:.1f}). Please avoid direct harsh glare.",
         )
 
-    blur_score = float(cv2.Laplacian(gray_crop, cv2.CV_64F).var())
+    # For low-light crops, enhance contrast before checking sharpness
+    eval_gray = gray_crop
+    if avg_brightness < 45.0:
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+        eval_gray = clahe.apply(gray_crop)
+
+    blur_score = float(cv2.Laplacian(eval_gray, cv2.CV_64F).var())
     if blur_score < settings.FACE_BLUR_THRESHOLD:
         return (
             False,
@@ -239,21 +292,27 @@ def check_cross_student_duplicate(
     Returns (is_duplicate: bool, matched_student_id: Optional[str]).
     """
     all_active = FaceRepository.get_all_active_embeddings()
-    for rec in all_active:
-        other_student_id = rec.get("student_id")
-        if str(other_student_id) == str(target_student_id):
-            continue
+    filtered = [
+        rec for rec in all_active
+        if str(rec.get("student_id")) != str(target_student_id) and rec.get("embedding")
+    ]
+    if not filtered:
+        return False, None
 
-        existing_embedding = rec.get("embedding", [])
-        if not existing_embedding:
-            continue
+    embeddings_matrix = np.array([r["embedding"] for r in filtered], dtype=np.float32)
+    query_vec = np.array(new_embedding, dtype=np.float32)
 
-        sim = compute_cosine_similarity(new_embedding, existing_embedding)
-        if sim >= settings.FACE_MATCH_THRESHOLD:
-            logger.warning(
-                f"Cross-student face match detected! Similarity: {sim:.3f} >= {settings.FACE_MATCH_THRESHOLD}"
-            )
-            return True, str(other_student_id)
+    # Fast vectorized similarity computation
+    sims = np.dot(embeddings_matrix, query_vec)
+    max_idx = int(np.argmax(sims))
+    max_sim = float(sims[max_idx])
+
+    if max_sim >= settings.FACE_MATCH_THRESHOLD:
+        matched_id = str(filtered[max_idx].get("student_id"))
+        logger.warning(
+            f"Cross-student face match detected! Similarity: {max_sim:.3f} >= {settings.FACE_MATCH_THRESHOLD}"
+        )
+        return True, matched_id
 
     return False, None
 
@@ -292,22 +351,18 @@ def recognize_face_from_bytes(
         return False, None, 0.0, quality_msg
 
     all_embeddings = FaceRepository.get_all_active_embeddings()
-    if not all_embeddings:
+    valid_records = [r for r in all_embeddings if r.get("student_id") and r.get("embedding")]
+    if not valid_records:
         return False, None, 0.0, "No registered face embeddings exist in database."
 
-    best_match_student_id = None
-    best_similarity = 0.0
+    # Fast vectorized matrix dot product across all registered embeddings
+    embeddings_matrix = np.array([r["embedding"] for r in valid_records], dtype=np.float32)
+    query_vec = np.array(query_embedding, dtype=np.float32)
 
-    for rec in all_embeddings:
-        student_id = rec.get("student_id")
-        stored_emb = rec.get("embedding")
-        if not student_id or not stored_emb:
-            continue
-
-        sim = compute_cosine_similarity(query_embedding, stored_emb)
-        if sim > best_similarity:
-            best_similarity = sim
-            best_match_student_id = str(student_id)
+    sims = np.dot(embeddings_matrix, query_vec)
+    best_idx = int(np.argmax(sims))
+    best_similarity = float(sims[best_idx])
+    best_match_student_id = str(valid_records[best_idx]["student_id"])
 
     if best_similarity >= settings.FACE_MATCH_THRESHOLD and best_match_student_id:
         return (

@@ -20,19 +20,50 @@ class AnalyticsService:
     @classmethod
     def _get_student_doc(cls, student_id: str) -> Optional[dict]:
         db = cls._get_db()
+        if not student_id:
+            return None
+        student_id_str = str(student_id)
+        # 1. Try finding by student _id
         try:
-            doc = db.students.find_one({"_id": ObjectId(student_id)})
+            if ObjectId.is_valid(student_id_str):
+                doc = db.students.find_one({"_id": ObjectId(student_id_str)})
+                if doc:
+                    return doc
+        except Exception:
+            pass
+        # 2. Try finding by user_id as ObjectId
+        try:
+            if ObjectId.is_valid(student_id_str):
+                doc = db.students.find_one({"user_id": ObjectId(student_id_str)})
+                if doc:
+                    return doc
+        except Exception:
+            pass
+        # 3. Try finding by user_id as string
+        try:
+            doc = db.students.find_one({"user_id": student_id_str})
             if doc:
                 return doc
         except Exception:
             pass
+        # 4. Try finding by student_id code (e.g. STU-501)
         try:
-            doc = db.students.find_one({"user_id": ObjectId(student_id)})
+            doc = db.students.find_one({"student_id": student_id_str})
             if doc:
                 return doc
         except Exception:
             pass
-        return db.students.find_one({"student_id": student_id})
+        # 5. Fallback: check if student_id is a User ID, finding user doc first
+        try:
+            if ObjectId.is_valid(student_id_str):
+                user = db.users.find_one({"_id": ObjectId(student_id_str)})
+                if user:
+                    doc = db.students.find_one({"$or": [{"user_id": user["_id"]}, {"user_id": str(user["_id"])}]})
+                    if doc:
+                        return doc
+        except Exception:
+            pass
+        return None
 
     # --- DETERMINISTIC EXPLAINABLE RISK ENGINE ---
     @classmethod
@@ -222,14 +253,27 @@ class AnalyticsService:
             )
 
         student_id_str = str(student_doc["_id"])
-        user_doc = db.users.find_one({"_id": student_doc.get("user_id")})
-        student_name = f"{user_doc.get('first_name', '')} {user_doc.get('last_name', '')}".strip() if user_doc else "Student"
+        user_doc = None
+        if student_doc.get("user_id"):
+            try:
+                user_doc = db.users.find_one({"_id": ObjectId(student_doc["user_id"])})
+            except Exception:
+                user_doc = db.users.find_one({"_id": str(student_doc["user_id"])})
+        
+        student_name = ""
+        if user_doc:
+            student_name = f"{user_doc.get('first_name', '')} {user_doc.get('last_name', '')}".strip()
+        if not student_name:
+            student_name = student_doc.get("name") or student_doc.get("student_id") or "Student"
 
-        try:
-            class_doc = db.classes.find_one({"_id": ObjectId(student_doc.get("class_id"))})
-        except Exception:
-            class_doc = None
-        class_name = class_doc.get("name", "Class") if class_doc else "Class"
+        class_doc = None
+        if student_doc.get("class_id"):
+            try:
+                class_doc = db.classes.find_one({"_id": ObjectId(student_doc["class_id"])})
+            except Exception:
+                class_doc = db.classes.find_one({"_id": str(student_doc["class_id"])})
+        
+        class_name = (class_doc.get("class_name") or class_doc.get("name")) if class_doc else "Class"
 
         # Calculate Summary & Subject Summaries from Step 4 repository
         summary = AttendanceRepository.calculate_student_summary(student_id_str)
@@ -245,7 +289,7 @@ class AnalyticsService:
         analytics_data = {
             "student_id": student_id_str,
             "student_name": student_name,
-            "roll_number": student_doc.get("roll_number", ""),
+            "roll_number": student_doc.get("roll_number", "") or student_doc.get("student_id", ""),
             "class_name": class_name,
             "overall_attendance_percentage": summary.get("attendance_percentage", 0.0),
             "present_count": summary.get("present", 0),

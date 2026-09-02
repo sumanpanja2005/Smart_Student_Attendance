@@ -35,11 +35,10 @@ def get_my_analytics(
     current_user: dict = Depends(require_role("STUDENT")),
 ):
     """Retrieves logged-in student's analytics, status breakdown, and explainable risk factors."""
-    db = db_manager.db
-    student_doc = db.students.find_one({"user_id": ObjectId(current_user["id"])})
+    student_doc = AnalyticsService._get_student_doc(current_user["id"])
     if not student_doc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Student profile not found."
+            status_code=status.HTTP_404_NOT_FOUND, detail="Student profile not found for this account."
         )
 
     student_id_str = str(student_doc["_id"])
@@ -66,8 +65,7 @@ def get_my_trend(
     current_user: dict = Depends(require_role("STUDENT")),
 ):
     """Retrieves logged-in student's attendance trend (daily/weekly/monthly)."""
-    db = db_manager.db
-    student_doc = db.students.find_one({"user_id": ObjectId(current_user["id"])})
+    student_doc = AnalyticsService._get_student_doc(current_user["id"])
     if not student_doc:
         return AttendanceTrendResponse(period_type=period_type, points=[])
 
@@ -85,8 +83,7 @@ def get_my_subject_analytics(
     current_user: dict = Depends(require_role("STUDENT")),
 ):
     """Retrieves logged-in student's subject-wise attendance analytics."""
-    db = db_manager.db
-    student_doc = db.students.find_one({"user_id": ObjectId(current_user["id"])})
+    student_doc = AnalyticsService._get_student_doc(current_user["id"])
     if not student_doc:
         return []
 

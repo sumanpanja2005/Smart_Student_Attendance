@@ -33,8 +33,8 @@ class Settings(BaseSettings):
     FACE_MATCH_THRESHOLD: float = 0.50
     FACE_MIN_DETECTION_CONFIDENCE: float = 0.50
     FACE_MIN_SIZE_PX: int = 80
-    FACE_BLUR_THRESHOLD: float = 80.0
-    FACE_BRIGHTNESS_MIN: float = 40.0
+    FACE_BLUR_THRESHOLD: float = 25.0
+    FACE_BRIGHTNESS_MIN: float = 10.0
     FACE_BRIGHTNESS_MAX: float = 240.0
     FACE_MAX_UPLOAD_SIZE_MB: int = 5
 
