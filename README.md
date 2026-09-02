@@ -45,3 +45,9 @@ cd backend
 .\.venv\Scripts\python.exe tests/test_step7_audit_monitoring.py
 .\.venv\Scripts\python.exe tests/test_step8_production_hardening.py
 ```
+**ADMIN PASS**
+```
+ admin@smartattendance.com
+ ```
+ ```
+AdminPass123!

@@ -21,9 +21,26 @@ class AttendanceService:
     def _get_teacher_doc(cls, user_id: str) -> Optional[dict]:
         db = cls._get_db()
         try:
-            return db.teachers.find_one({"user_id": ObjectId(user_id)})
+            if ObjectId.is_valid(user_id):
+                doc = db.teachers.find_one({"user_id": ObjectId(user_id)})
+                if doc:
+                    return doc
         except Exception:
-            return db.teachers.find_one({"user_id": user_id})
+            pass
+        try:
+            doc = db.teachers.find_one({"user_id": str(user_id)})
+            if doc:
+                return doc
+        except Exception:
+            pass
+        try:
+            if ObjectId.is_valid(user_id):
+                doc = db.teachers.find_one({"_id": ObjectId(user_id)})
+                if doc:
+                    return doc
+        except Exception:
+            pass
+        return None
 
     @classmethod
     def _get_student_doc(cls, student_id: str) -> Optional[dict]:
@@ -74,26 +91,20 @@ class AttendanceService:
         teacher_id_str = current_user["id"]
         if current_user["role"] == "TEACHER":
             teacher_doc = cls._get_teacher_doc(current_user["id"])
-            if not teacher_doc:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Teacher profile record not found.",
-                )
-            teacher_id_str = str(teacher_doc["_id"])
+            if teacher_doc:
+                teacher_id_str = str(teacher_doc["_id"])
 
-            # Verify teacher assignment to requested class and subject
-            assigned_classes = [str(c) for c in teacher_doc.get("assigned_class_ids", [])]
-            assigned_subjects = [str(s) for s in teacher_doc.get("assigned_subject_ids", [])]
+            assigned_classes = [str(c) for c in teacher_doc.get("assigned_class_ids", [])] if teacher_doc else []
+            assigned_subjects = [str(s) for s in teacher_doc.get("assigned_subject_ids", [])] if teacher_doc else []
             class_teacher_ids = [str(t) for t in class_doc.get("teacher_ids", [])]
+            class_teacher_id = str(class_doc.get("class_teacher_id")) if class_doc.get("class_teacher_id") else None
 
             is_class_authorized = (
                 str(class_id) in assigned_classes
                 or teacher_id_str in class_teacher_ids
-                or str(class_doc.get("class_teacher_id")) == teacher_id_str
-            )
-            is_subject_authorized = (
-                len(assigned_subjects) == 0  # If subjects empty, assigned via class
-                or str(subject_id) in assigned_subjects
+                or current_user["id"] in class_teacher_ids
+                or class_teacher_id in (teacher_id_str, current_user["id"])
+                or (len(assigned_classes) == 0 and len(class_teacher_ids) == 0 and class_teacher_id is None)
             )
 
             if not is_class_authorized:
@@ -531,8 +542,11 @@ class AttendanceService:
         except Exception:
             user_doc = None
 
-        doc["class_name"] = class_doc.get("name", "Class") if class_doc else "Class"
-        doc["subject_name"] = subject_doc.get("subject_name", "Subject") if subject_doc else "Subject"
+        class_name = (class_doc.get("class_name") or class_doc.get("name")) if class_doc else None
+        doc["class_name"] = class_name if class_name else "Class"
+
+        subject_name = (subject_doc.get("subject_name") or subject_doc.get("name")) if subject_doc else None
+        doc["subject_name"] = subject_name if subject_name else "Subject"
 
         if user_doc:
             doc["teacher_name"] = f"{user_doc.get('first_name', '')} {user_doc.get('last_name', '')}".strip()
